@@ -1,0 +1,33 @@
+// ============================================================================
+// lib.acts - small helpers shared by lukOS and its games.
+// (`use "lib.acts";` is safe to write in several files: a file is only
+// included once.)
+// ============================================================================
+
+// Print a non-negative number in decimal (it calls itself for the digits).
+fn printn(n) {
+    if n >= 10 { printn(n / 10); }
+    putc('0' + n % 10);
+}
+
+// Print a string with its first character at screen (row, col).
+fn text(row, col, s) {
+    cursor(row, col);
+    print(s);
+}
+
+// Print a number at (row, col), first wiping 6 cells so old digits vanish.
+fn numat(row, col, n) {
+    text(row, col, "      ");
+    cursor(row, col);
+    printn(n);
+}
+
+// Blank the whole screen by hand (no flicker, cursor state is left alone).
+fn blank_screen() {
+    var i = 0;
+    while i < 2000 {
+        vpoke(i, 0x0720);
+        i++;
+    }
+}

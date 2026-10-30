@@ -1,0 +1,162 @@
+// ============================================================================
+// flappy.acts - Flappy Bird, written in acts.
+//
+// Controls:  SPACE, UP or W  flap        ESC  back to lukOS
+//
+// Pipes scroll left; the bird (a yellow smiley) falls under gravity and flaps
+// upward when you press a key.  Hit a pipe or the ground and it's game over.
+// Every name here starts with fb_ / FB_ so it can't clash with other games.
+// ============================================================================
+
+use "lib.acts";
+
+const FB_COL = 20;            // the bird always stays in this screen column
+const FB_GAP = 8;             // height of the opening between pipe halves
+const FB_PIPE = 0x0ADB;       // bright green block
+const FB_BIRD = 0x0E02;       // yellow smiley face
+const FB_SKY = 0x0720;        // empty space
+const FB_GROUND = 0x02B1;     // green shaded block
+
+// Up to 4 pipes at once.  A pipe is 4 columns wide; fb_px is its left column.
+var fb_px[4];
+var fb_gy[4];                 // first row of the gap
+var fb_on[4];                 // 1 if this pipe slot is in use
+var fb_sc[4];                 // 1 once the bird has passed it (scored)
+
+// The bird's height is kept in 1/16ths of a row so gravity can be gentle:
+// row = fb_y >> 4.  fb_vy is its speed in 1/16 rows per frame (negative = up).
+var fb_y = 0;
+var fb_vy = 0;
+var fb_score = 0;
+
+// Draw (or erase, with w = FB_SKY) the pipe pieces in one screen column.
+// Rows 1..23 are the sky; the rows from gy to gy+FB_GAP-1 stay open.
+fn fb_col(col, gy, w) {
+    if col < 0 || col >= 80 { return; }
+    var r = 1;
+    while r < 24 {
+        if r < gy || r >= gy + FB_GAP { vpoke(r * 80 + col, w); }
+        r++;
+    }
+}
+
+// Start a new pipe at the right edge, unless the last one is still too close.
+fn fb_spawn() {
+    var i = 0;
+    while i < 4 {
+        if fb_on[i] && fb_px[i] > 55 { return; }
+        i++;
+    }
+    i = 0;
+    while i < 4 {
+        if fb_on[i] == 0 {
+            fb_on[i] = 1;
+            fb_sc[i] = 0;
+            fb_px[i] = 79;
+            fb_gy[i] = 3 + rand(11);              // gap top: rows 3..13
+            fb_col(79, fb_gy[i], FB_PIPE);
+            return;
+        }
+        i++;
+    }
+}
+
+// Move every pipe one column to the left and count the ones we passed.
+fn fb_scroll() {
+    var i = 0;
+    while i < 4 {
+        if fb_on[i] {
+            fb_col(fb_px[i] + 3, fb_gy[i], FB_SKY);   // erase the right edge
+            fb_px[i]--;
+            fb_col(fb_px[i], fb_gy[i], FB_PIPE);      // draw the new left edge
+            if fb_px[i] <= -4 { fb_on[i] = 0; }
+            if fb_on[i] && fb_sc[i] == 0 && fb_px[i] + 3 < FB_COL {
+                fb_sc[i] = 1;
+                fb_score++;
+                numat(0, 9, fb_score);
+            }
+        }
+        i++;
+    }
+}
+
+// Move the bird one frame.  Returns 1 if it crashed.
+fn fb_bird() {
+    fb_vy += 2;                                   // gravity
+    if fb_vy > 16 { fb_vy = 16; }                 // terminal velocity: 1 row/frame
+    var oldrow = fb_y >> 4;
+    fb_y += fb_vy;
+    if fb_y < 16 { fb_y = 16; fb_vy = 0; }        // bump the ceiling (row 1)
+    var row = fb_y >> 4;
+    var dead = 0;
+    if row >= 24 {                                // hit the ground
+        row = 23;
+        dead = 1;
+    } else if (vpeek(row * 80 + FB_COL) & 255) == 0xDB {   // hit a pipe
+        dead = 1;
+    }
+    vpoke(oldrow * 80 + FB_COL, FB_SKY);          // erase old position
+    vpoke(row * 80 + FB_COL, FB_BIRD);            // draw new one
+    return dead;
+}
+
+// Play one game.  Returns 1 if the player pressed ESC, 0 if the bird crashed.
+fn fb_play() {
+    blank_screen();
+    var c = 0;
+    while c < 80 {
+        vpoke(24 * 80 + c, FB_GROUND);
+        c++;
+    }
+    var i = 0;
+    while i < 4 { fb_on[i] = 0; i++; }
+    fb_y = 12 * 16;
+    fb_vy = 0;
+    fb_score = 0;
+    vpoke(12 * 80 + FB_COL, FB_BIRD);
+    text(0, 2, "Score:");
+    numat(0, 9, 0);
+    text(10, 20, "SPACE / UP = flap     ESC = quit");
+    text(12, 20, "press a key to start");
+
+    var k = getkey();                             // wait for the first key
+    if (k >> 8) == 0x01 { return 1; }
+    text(10, 20, "                                  ");
+    text(12, 20, "                    ");
+    fb_vy = -20;                                  // the first flap
+    fb_spawn();
+
+    var frame = 0;
+    while true {
+        wait(1);                                  // ~18 frames per second
+        frame++;
+        while keypending() {
+            k = getkey();
+            var s = k >> 8;
+            if s == 0x01 { return 1; }            // ESC
+            if s == 0x39 || s == 0x48 || s == 0x11 { fb_vy = -20; }   // flap!
+        }
+        if (frame & 1) == 0 {                     // pipes move every 2nd frame
+            fb_scroll();
+            fb_spawn();
+        }
+        if fb_bird() { return 0; }
+    }
+}
+
+// Entry point called by the shell.
+fn flappy() {
+    hidecursor();
+    while true {
+        if fb_play() { break; }
+        text(12, 28, "GAME OVER   score: ");
+        printn(fb_score);
+        text(14, 22, "any key = play again, ESC = back to lukOS");
+        wait(10);                                 // brief pause so a flap doesn't skip this
+        while keypending() { getkey(); }
+        var k = getkey();
+        if (k >> 8) == 0x01 { break; }
+    }
+    showcursor();
+    clear();
+}

@@ -1,0 +1,116 @@
+// ============================================================================
+// snake.acts - the Snake game, written in acts.
+//
+// Controls: arrow keys or WASD.  Eat the red diamonds.  ESC quits to the shell.
+// The game draws straight into VGA text memory with vpoke()/vpeek().
+// A screen cell holds one 16-bit word:  (colour << 8) | character.
+// ============================================================================
+
+use "lib.acts";
+
+const W = 80;                 // screen width in cells
+const H = 25;                 // screen height in cells
+const CELLS = 2000;           // W * H
+const SNAKE = 0x0ADB;         // bright green full block
+const FOOD  = 0x0C04;         // bright red diamond
+const BLANK = 0x0720;         // grey space
+
+// The snake's body is a ring buffer of screen-cell numbers.
+// body[tail] is the oldest cell (the tail), body[head] the newest (the head).
+// 2048 is a power of two, so  & 2047  makes an index wrap around.
+var body[2048];
+var head = 0;
+var tail = 0;
+var dr = 0;                   // current direction: row change per step
+var dc = 1;                   //                    column change per step
+var score = 0;
+
+// Put a food diamond on a random empty cell.
+fn place_food() {
+    while true {
+        var c = rand(CELLS);
+        if vpeek(c) == BLANK {
+            vpoke(c, FOOD);
+            return;
+        }
+    }
+}
+
+// Change direction, but never straight back into ourselves.
+fn turn(nr, nc) {
+    if nr + dr != 0 || nc + dc != 0 {
+        dr = nr;
+        dc = nc;
+    }
+}
+
+// Play one game.  Returns 1 if the player pressed ESC, 0 if the snake died.
+fn play() {
+    var i = 0;
+    while i < CELLS {                 // clear the screen by hand
+        vpoke(i, BLANK);
+        i++;
+    }
+    var r = 12;                       // head starts mid-screen, moving right
+    var c = 40;
+    head = 0;
+    tail = 0;
+    body[0] = r * W + c;
+    vpoke(body[0], SNAKE);
+    dr = 0;
+    dc = 1;
+    score = 0;
+    place_food();
+
+    while true {
+        wait(2);                      // 2 timer ticks per step = ~9 steps/second
+
+        if keypending() {
+            var k = getkey();
+            var s = k >> 8;           // the scancode lives in the high byte
+            if s == 0x01 { return 1; }                  // ESC
+            if s == 0x48 || s == 0x11 { turn(-1, 0); }  // up    / W
+            if s == 0x50 || s == 0x1F { turn(1, 0); }   // down  / S
+            if s == 0x4B || s == 0x1E { turn(0, -1); }  // left  / A
+            if s == 0x4D || s == 0x20 { turn(0, 1); }   // right / D
+        }
+
+        r += dr;                      // move the head
+        c += dc;
+        if r < 0 || r >= H || c < 0 || c >= W { return 0; }   // hit a wall
+
+        var cell = r * W + c;
+        var what = vpeek(cell) & 255; // which character is already there?
+        if what == 0xDB { return 0; } // ran into ourselves
+
+        vpoke(cell, SNAKE);
+        head = (head + 1) & 2047;
+        body[head] = cell;
+
+        if what == 4 {                // ate food: grow (keep the tail), new food
+            score++;
+            place_food();
+        } else {                      // normal step: erase the old tail
+            vpoke(body[tail], BLANK);
+            tail = (tail + 1) & 2047;
+        }
+    }
+}
+
+// Entry point called by the shell.
+fn snake() {
+    hidecursor();
+    while true {
+        if play() { break; }
+        cursor(12, 28);
+        print("GAME OVER   score: ");
+        printn(score);
+        cursor(14, 22);
+        print("any key = play again, ESC = back to lukOS");
+        while keypending() { getkey(); }      // throw away keys pressed while dying
+        var k = getkey();
+        if (k >> 8) == 0x01 { break; }
+    }
+    showcursor();
+    clear();
+}

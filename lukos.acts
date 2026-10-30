@@ -1,0 +1,90 @@
+// ============================================================================
+// lukOS - a tiny operating system, written in acts.
+//
+// Boots, says Hello World, then runs a command prompt:
+//     help     list the commands
+//     clear    clear the screen
+//     snake    play Snake
+//     tetris   play Tetris
+//     flappy   play Flappy Bird
+//     reboot   restart the computer
+//     hello    say Hello, World! again
+// ============================================================================
+
+use "lib.acts";
+use "snake.acts";
+use "tetris.acts";
+use "flappy.acts";
+
+var line[32];                 // the input line: 32 words = 64 bytes of room
+
+// Read a line of text into buf (at most max-1 characters), echoing as we go.
+// Handles Backspace.  Returns when Enter is pressed.
+fn readline(buf, max) {
+    var n = 0;
+    while true {
+        var a = getkey() & 255;           // low byte = the ASCII code
+        if a == 13 {                      // Enter
+            pokeb(buf + n, 0);            // end the string with a 0 byte
+            putc('\n');
+            return n;
+        }
+        if a == 8 {                       // Backspace: step back, blank, step back
+            if n > 0 {
+                n--;
+                print("\b \b");
+            }
+        } else if a >= 32 && a < 127 && n < max - 1 {   // printable character
+            pokeb(buf + n, a);
+            n++;
+            putc(a);
+        }
+    }
+}
+
+fn help() {
+    print("Commands:\n");
+    print("  help    show this list\n");
+    print("  clear   clear the screen\n");
+    print("  snake   play Snake\n");
+    print("  tetris  play Tetris\n");
+    print("  flappy  play Flappy Bird\n");
+    print("  reboot  restart the computer\n");
+    print("  hello   say hello\n");
+}
+
+// Look at a command line and do what it says.
+fn run(cmd) {
+    if peekb(cmd) == 0 { return; }        // empty line: do nothing
+    if streq(cmd, "help") {
+        help();
+    } else if streq(cmd, "clear") {
+        clear();
+    } else if streq(cmd, "snake") {
+        snake();
+    } else if streq(cmd, "tetris") {
+        tetris();
+    } else if streq(cmd, "flappy") {
+        flappy();
+    } else if streq(cmd, "reboot") {
+        reboot();
+    } else if streq(cmd, "hello") {
+        print("Hello, World!\n");
+    } else {
+        print("Unknown command: ");
+        print(cmd);
+        print("\nType 'help' for a list of commands.\n");
+    }
+}
+
+fn main() {
+    clear();
+    print("Hello, World!\n");
+    print("lukOS v0.3 - written in acts\n");
+    print("Type 'help' for commands.\n\n");
+    while true {
+        print("lukOS> ");
+        readline(line, 64);
+        run(line);
+    }
+}

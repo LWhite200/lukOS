@@ -1,0 +1,348 @@
+// ============================================================================
+// tetris.acts - Tetris, written in acts.
+//
+// Controls:  LEFT/RIGHT or A/D  move        UP or W   rotate
+//            DOWN or S          soft drop   SPACE     hard drop
+//            P                  pause       ESC       back to lukOS
+//
+// The board is 10 columns x 20 rows.  Each board cell is drawn 2 screen
+// columns wide so the blocks look roughly square.
+// Every name here starts with tt_ / TT_ so it can't clash with the other games.
+// ============================================================================
+
+use "lib.acts";
+
+const TT_W = 10;              // board width  in cells
+const TT_H = 20;              // board height in cells
+const TT_LEFT = 30;           // screen column where the board starts
+const TT_TOP = 2;             // screen row where the board starts
+
+// A piece is a 4x4 grid stored in 16 bits, one bit per square, row by row
+// from the top-left (the top bit is the top-left square).  Each of the 7
+// pieces has 4 rotations, so tt_masks[piece * 4 + rotation] is its grid.
+var tt_masks[28];
+var tt_col[7];                // colour attribute of each piece
+var tt_board[200];            // 0 = empty, otherwise the colour of the block
+
+var tt_p = 0;                 // current piece (0..6)
+var tt_rot = 0;               // its rotation (0..3)
+var tt_x = 0;                 // column of the piece's 4x4 grid (may be < 0)
+var tt_y = 0;                 // row of the piece's 4x4 grid
+var tt_next = 0;              // the piece coming after this one
+var tt_score = 0;
+var tt_lines = 0;
+var tt_level = 0;
+
+// Fill in the piece shapes (acts arrays can't be pre-filled, so we do it here).
+fn tt_setup() {
+    // I
+    tt_masks[0] = 0x0F00;  tt_masks[1] = 0x2222;  tt_masks[2] = 0x00F0;  tt_masks[3] = 0x4444;
+    // J
+    tt_masks[4] = 0x8E00;  tt_masks[5] = 0x6440;  tt_masks[6] = 0x0E20;  tt_masks[7] = 0x44C0;
+    // L
+    tt_masks[8] = 0x2E00;  tt_masks[9] = 0x4460;  tt_masks[10] = 0x0E80; tt_masks[11] = 0xC440;
+    // O
+    tt_masks[12] = 0x6600; tt_masks[13] = 0x6600; tt_masks[14] = 0x6600; tt_masks[15] = 0x6600;
+    // S
+    tt_masks[16] = 0x6C00; tt_masks[17] = 0x4620; tt_masks[18] = 0x06C0; tt_masks[19] = 0x8C40;
+    // T
+    tt_masks[20] = 0x4E00; tt_masks[21] = 0x4640; tt_masks[22] = 0x0E40; tt_masks[23] = 0x4C40;
+    // Z
+    tt_masks[24] = 0xC600; tt_masks[25] = 0x2640; tt_masks[26] = 0x0C60; tt_masks[27] = 0x4C80;
+
+    tt_col[0] = 0x0B;   // I  cyan
+    tt_col[1] = 0x09;   // J  blue
+    tt_col[2] = 0x06;   // L  orange/brown
+    tt_col[3] = 0x0E;   // O  yellow
+    tt_col[4] = 0x0A;   // S  green
+    tt_col[5] = 0x0D;   // T  magenta
+    tt_col[6] = 0x0C;   // Z  red
+}
+
+fn tt_mask(p, rot) {
+    return tt_masks[p * 4 + rot];
+}
+
+// Is the square (r, c) of a 4x4 grid filled?
+fn tt_bit(mask, r, c) {
+    return (mask >> (15 - (r * 4 + c))) & 1;
+}
+
+// Would piece p in rotation rot fit with its grid at column x, row y?
+// (inside the walls, above the floor, and not overlapping settled blocks)
+fn tt_fits(p, rot, x, y) {
+    var m = tt_mask(p, rot);
+    var r = 0;
+    while r < 4 {
+        var c = 0;
+        while c < 4 {
+            if tt_bit(m, r, c) {
+                var bx = x + c;
+                var by = y + r;
+                if bx < 0 || bx >= TT_W || by >= TT_H { return 0; }
+                if by >= 0 && tt_board[by * TT_W + bx] != 0 { return 0; }
+            }
+            c++;
+        }
+        r++;
+    }
+    return 1;
+}
+
+// Move/rotate the current piece to a new place, but only if it fits there.
+fn tt_try(rot, x, y) {
+    if tt_fits(tt_p, rot, x, y) {
+        tt_rot = rot;
+        tt_x = x;
+        tt_y = y;
+        return 1;
+    }
+    return 0;
+}
+
+// Rotate clockwise; if that bumps into something, try nudging sideways
+// ("wall kick") so you can still turn next to a wall.
+fn tt_rotate() {
+    var nr = (tt_rot + 1) & 3;
+    if tt_try(nr, tt_x, tt_y) { return; }
+    if tt_try(nr, tt_x - 1, tt_y) { return; }
+    if tt_try(nr, tt_x + 1, tt_y) { return; }
+    if tt_try(nr, tt_x - 2, tt_y) { return; }
+    tt_try(nr, tt_x + 2, tt_y);
+}
+
+// Bring in the next piece at the top.  Returns 0 if there is no room (game over).
+fn tt_spawn() {
+    tt_p = tt_next;
+    tt_next = rand(7);
+    tt_rot = 0;
+    tt_x = 3;
+    tt_y = 0;
+    return tt_fits(tt_p, 0, 3, 0);
+}
+
+// Freeze the current piece into the board.
+fn tt_lock() {
+    var m = tt_mask(tt_p, tt_rot);
+    var r = 0;
+    while r < 4 {
+        var c = 0;
+        while c < 4 {
+            if tt_bit(m, r, c) {
+                var by = tt_y + r;
+                if by >= 0 { tt_board[by * TT_W + tt_x + c] = tt_col[tt_p]; }
+            }
+            c++;
+        }
+        r++;
+    }
+}
+
+// Remove every full row (rows above fall down).  Returns how many were removed.
+fn tt_clear_lines() {
+    var n = 0;
+    var r = TT_H - 1;
+    while r >= 0 {
+        var full = 1;
+        var c = 0;
+        while c < TT_W {
+            if tt_board[r * TT_W + c] == 0 { full = 0; }
+            c++;
+        }
+        if full {
+            n++;
+            var rr = r;
+            while rr > 0 {                    // copy each row down from the one above
+                c = 0;
+                while c < TT_W {
+                    tt_board[rr * TT_W + c] = tt_board[(rr - 1) * TT_W + c];
+                    c++;
+                }
+                rr--;
+            }
+            c = 0;
+            while c < TT_W {                  // top row becomes empty
+                tt_board[c] = 0;
+                c++;
+            }
+            // don't move r: the row that fell into place might be full too
+        } else {
+            r--;
+        }
+    }
+    return n;
+}
+
+// If the falling piece covers board square (r, c), return its colour, else 0.
+fn tt_cover(r, c) {
+    var rr = r - tt_y;
+    var cc = c - tt_x;
+    if rr < 0 || rr > 3 || cc < 0 || cc > 3 { return 0; }
+    if tt_bit(tt_mask(tt_p, tt_rot), rr, cc) { return tt_col[tt_p]; }
+    return 0;
+}
+
+// Draw the whole board (settled blocks + the falling piece).
+fn tt_draw() {
+    var r = 0;
+    while r < TT_H {
+        var c = 0;
+        while c < TT_W {
+            var a = tt_board[r * TT_W + c];
+            var v = tt_cover(r, c);
+            if v != 0 { a = v; }
+            var w = 0x0720;                           // empty: grey space
+            if a != 0 { w = (a << 8) | 0xDB; }        // filled: coloured block
+            var i = (TT_TOP + r) * 80 + TT_LEFT + c * 2;
+            vpoke(i, w);
+            vpoke(i + 1, w);
+            c++;
+        }
+        r++;
+    }
+}
+
+// Draw the "next piece" preview.
+fn tt_draw_next() {
+    var r = 0;
+    while r < 4 {
+        var c = 0;
+        while c < 4 {
+            var w = 0x0720;
+            if tt_bit(tt_mask(tt_next, 0), r, c) { w = (tt_col[tt_next] << 8) | 0xDB; }
+            var i = (5 + r) * 80 + 57 + c * 2;
+            vpoke(i, w);
+            vpoke(i + 1, w);
+            c++;
+        }
+        r++;
+    }
+}
+
+fn tt_stats() {
+    numat(9, 64, tt_score);
+    numat(11, 64, tt_lines);
+    numat(13, 64, tt_level);
+}
+
+// Draw the frame around the board and all the fixed text.
+fn tt_frame() {
+    blank_screen();
+    var r = 0;
+    while r < TT_H {
+        vpoke((TT_TOP + r) * 80 + TT_LEFT - 1, 0x07BA);        // left wall
+        vpoke((TT_TOP + r) * 80 + TT_LEFT + TT_W * 2, 0x07BA); // right wall
+        r++;
+    }
+    var c = 0;
+    while c < TT_W * 2 {
+        vpoke((TT_TOP + TT_H) * 80 + TT_LEFT + c, 0x07CD);     // floor
+        c++;
+    }
+    vpoke((TT_TOP + TT_H) * 80 + TT_LEFT - 1, 0x07C8);
+    vpoke((TT_TOP + TT_H) * 80 + TT_LEFT + TT_W * 2, 0x07BC);
+    text(0, 34, "T E T R I S");
+    text(3, 57, "NEXT");
+    text(9, 57, "SCORE");
+    text(11, 57, "LINES");
+    text(13, 57, "LEVEL");
+    text(4, 2, "LEFT/RIGHT  move");
+    text(5, 2, "UP          rotate");
+    text(6, 2, "DOWN        soft drop");
+    text(7, 2, "SPACE       hard drop");
+    text(8, 2, "P           pause");
+    text(9, 2, "ESC         quit");
+}
+
+// Play one game.  Returns 1 if the player pressed ESC, 0 on game over.
+fn tt_play() {
+    var i = 0;
+    while i < 200 { tt_board[i] = 0; i++; }
+    tt_score = 0;
+    tt_lines = 0;
+    tt_level = 0;
+    tt_frame();
+    tt_next = rand(7);
+    tt_spawn();
+    tt_draw_next();
+    tt_draw();
+    tt_stats();
+
+    var tick = 0;                 // timer ticks since the piece last fell
+    while true {
+        wait(1);
+        tick++;
+        var dirty = 0;            // does the screen need redrawing?
+
+        while keypending() {
+            var k = getkey();
+            var s = k >> 8;       // scancode
+            var a = k & 255;      // ascii
+            if s == 0x01 { return 1; }                               // ESC
+            if s == 0x4B || s == 0x1E { dirty |= tt_try(tt_rot, tt_x - 1, tt_y); }  // left  / A
+            if s == 0x4D || s == 0x20 { dirty |= tt_try(tt_rot, tt_x + 1, tt_y); }  // right / D
+            if s == 0x48 || s == 0x11 { tt_rotate(); dirty = 1; }    // up / W
+            if s == 0x50 || s == 0x1F {                              // down / S: drop now
+                tick = 999;
+                tt_score++;
+            }
+            if a == 32 {                                             // space: hard drop
+                while tt_try(tt_rot, tt_x, tt_y + 1) { tt_score += 2; }
+                tick = 999;
+                dirty = 1;
+            }
+            if a == 'p' || a == 'P' {                                // pause
+                text(22, 33, "-- PAUSED --");
+                getkey();
+                text(22, 33, "            ");
+                dirty = 1;
+            }
+        }
+
+        var delay = 12 - tt_level;      // higher level = shorter wait = faster
+        if tick >= delay {
+            tick = 0;
+            dirty = 1;
+            if tt_try(tt_rot, tt_x, tt_y + 1) == 0 {      // can't fall: lock it in
+                tt_lock();
+                var n = tt_clear_lines();
+                if n > 0 {
+                    var pts = 10;
+                    if n == 2 { pts = 30; }
+                    else if n == 3 { pts = 50; }
+                    else if n == 4 { pts = 80; }
+                    tt_score += pts * (tt_level + 1);
+                    tt_lines += n;
+                    tt_level = tt_lines / 10;
+                    if tt_level > 9 { tt_level = 9; }
+                }
+                if tt_score > 30000 { tt_score = 30000; }   // keep it positive in 16 bits
+                if tt_spawn() == 0 {                        // no room: game over
+                    tt_draw();
+                    tt_stats();
+                    return 0;
+                }
+                tt_draw_next();
+            }
+        }
+        if dirty {
+            tt_draw();
+            tt_stats();
+        }
+    }
+}
+
+// Entry point called by the shell.
+fn tetris() {
+    hidecursor();
+    tt_setup();
+    while true {
+        if tt_play() { break; }
+        text(23, 14, "GAME OVER   any key = again, ESC = back to lukOS");
+        while keypending() { getkey(); }          // ignore keys pressed while dying
+        var k = getkey();
+        if (k >> 8) == 0x01 { break; }
+    }
+    showcursor();
+    clear();
+}
